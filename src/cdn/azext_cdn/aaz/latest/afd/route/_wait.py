@@ -20,7 +20,7 @@ class Wait(AAZWaitCommand):
 
     _aaz_info = {
         "resources": [
-            ["mgmt-plane", "/subscriptions/{}/resourcegroups/{}/providers/microsoft.cdn/profiles/{}/afdendpoints/{}/routes/{}", "2025-06-01"],
+            ["mgmt-plane", "/subscriptions/{}/resourcegroups/{}/providers/microsoft.cdn/profiles/{}/afdendpoints/{}/routes/{}", "2026-04-01-preview"],
         ]
     }
 
@@ -141,7 +141,7 @@ class Wait(AAZWaitCommand):
         def query_parameters(self):
             parameters = {
                 **self.serialize_query_param(
-                    "api-version", "2025-06-01",
+                    "api-version", "2026-04-01-preview",
                     required=True,
                 ),
             }
@@ -220,7 +220,6 @@ class Wait(AAZWaitCommand):
             )
             properties.origin_group = AAZObjectType(
                 serialized_name="originGroup",
-                flags={"required": True},
             )
             _WaitHelper._build_schema_resource_reference_read(properties.origin_group)
             properties.origin_path = AAZStrType(

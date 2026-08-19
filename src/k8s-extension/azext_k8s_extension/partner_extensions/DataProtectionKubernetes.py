@@ -3,7 +3,7 @@
 # Licensed under the MIT License. See License.txt in the project root for license information.
 # --------------------------------------------------------------------------------------------
 
-# pylint: disable=unused-argument
+# pylint: disable=unused-argument,too-many-instance-attributes
 from knack.log import get_logger
 from azure.cli.core.commands.client_factory import get_subscription_id
 from azure.cli.core.azclierror import RequiredArgumentMissingError, InvalidArgumentValueError
@@ -110,6 +110,7 @@ class DataProtectionKubernetes(DefaultExtension):
         extension_type,
         scope,
         auto_upgrade_minor_version,
+        auto_upgrade_mode,
         release_train,
         version,
         target_namespace,
@@ -160,6 +161,7 @@ class DataProtectionKubernetes(DefaultExtension):
         extension = Extension(
             extension_type=extension_type,
             auto_upgrade_minor_version=True,
+            auto_upgrade_mode=auto_upgrade_mode,
             release_train=release_train,
             scope=ext_scope,
             configuration_settings=configuration_settings
@@ -172,6 +174,7 @@ class DataProtectionKubernetes(DefaultExtension):
         resource_group_name,
         cluster_name,
         auto_upgrade_minor_version,
+        auto_upgrade_mode,
         release_train,
         version,
         configuration_settings,
@@ -207,6 +210,7 @@ class DataProtectionKubernetes(DefaultExtension):
 
         return PatchExtension(
             auto_upgrade_minor_version=True,
+            auto_upgrade_mode=auto_upgrade_mode,
             release_train=release_train,
             configuration_settings=configuration_settings,
         )

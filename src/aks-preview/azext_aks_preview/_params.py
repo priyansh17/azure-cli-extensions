@@ -33,6 +33,7 @@ from azure.cli.core.commands.parameters import (
     tags_type,
     zones_type,
 )
+from azure.cli.core.commands.validators import validate_file_or_dict
 from azext_aks_preview._validators import (
     validate_nat_gateway_managed_outbound_ipv6_count,
     validate_nat_gateway_v2_params,
@@ -67,6 +68,8 @@ from azext_aks_preview._consts import (
     CONST_GPU_INSTANCE_PROFILE_MIG7_G,
     CONST_LOAD_BALANCER_SKU_BASIC,
     CONST_LOAD_BALANCER_SKU_STANDARD,
+    CONST_BASTION_SKU_STANDARD,
+    CONST_BASTION_SKU_PREMIUM,
     CONST_MANAGED_CLUSTER_SKU_TIER_FREE,
     CONST_MANAGED_CLUSTER_SKU_TIER_STANDARD,
     CONST_MANAGED_CLUSTER_SKU_TIER_PREMIUM,
@@ -107,6 +110,7 @@ from azext_aks_preview._consts import (
     CONST_OS_SKU_UBUNTU,
     CONST_OS_SKU_UBUNTU2204,
     CONST_OS_SKU_UBUNTU2404,
+    CONST_OS_SKU_UBUNTU2604,
     CONST_OS_SKU_WINDOWS2019,
     CONST_OS_SKU_WINDOWS2022,
     CONST_OS_SKU_WINDOWS2025,
@@ -214,6 +218,7 @@ from azext_aks_preview._validators import (
     validate_message_of_the_day,
     validate_node_public_ip_prefix_ids,
     validate_node_public_ip_tags,
+    validate_bastion_public_ip_id,
     validate_nodepool_id,
     validate_nodepool_labels,
     validate_nodepool_taints,
@@ -237,8 +242,11 @@ from azext_aks_preview._validators import (
     validate_start_time,
     validate_user,
     validate_utc_offset,
+    validate_duration_hours,
     validate_vm_set_type,
     validate_vnet_subnet_id,
+    validate_system_node_subnet_id,
+    validate_node_subnet_id,
     validate_force_upgrade_disable_and_enable_parameters,
     validate_azure_service_mesh_revision,
     validate_artifact_streaming,
@@ -251,6 +259,7 @@ from azext_aks_preview._validators import (
     validate_drain_batch_size,
     validate_resource_group_parameter,
     validate_location_resource_group_cluster_parameters,
+    validate_prepared_image_specification_id,
 )
 from azext_aks_preview.azurecontainerstorage._consts import (
     CONST_ACSTOR_ALL,
@@ -279,6 +288,34 @@ from .action import (
 )
 
 from knack.arguments import CLIArgumentType
+from knack.deprecation import Deprecated
+
+
+class _SizedDeprecated(Deprecated):
+    """A Deprecated option that reports a length.
+
+    knack computes the preview target with sorted(options_list, key=len). A plain Deprecated
+    has no __len__, so combining is_preview=True with a deprecated option name raises
+    TypeError. Reporting the length of the option name keeps both status tags usable and
+    makes the longest (current) option name the preview target.
+    """
+
+    def __len__(self):
+        return len(self.target)
+
+
+def _deprecate_option(c, target, redirect):
+    """Deprecate a single option name and keep it compatible with is_preview.
+
+    Builds the Deprecated object through c.deprecate() so that the message, the object type
+    and the applicability checks stay identical to every other deprecated option, then only
+    adds the __len__ behaviour that knack needs for the preview tag.
+    """
+    deprecated = c.deprecate(target=target, redirect=redirect)
+    if deprecated is not None:
+        deprecated.__class__ = _SizedDeprecated
+    return deprecated
+
 
 # candidates for enumeration
 # consts for AgentPool
@@ -304,6 +341,7 @@ node_os_skus_create = [
     CONST_OS_SKU_MARINER,
     CONST_OS_SKU_UBUNTU2204,
     CONST_OS_SKU_UBUNTU2404,
+    CONST_OS_SKU_UBUNTU2604,
     CONST_OS_SKU_AZURELINUXOSGUARD,
     CONST_OS_SKU_AZURELINUX3OSGUARD,
     CONST_OS_SKU_AZURECONTAINERLINUX,
@@ -321,6 +359,7 @@ node_os_skus_update = [
     CONST_OS_SKU_UBUNTU,
     CONST_OS_SKU_UBUNTU2204,
     CONST_OS_SKU_UBUNTU2404,
+    CONST_OS_SKU_UBUNTU2604,
     CONST_OS_SKU_AZURELINUXOSGUARD,
     CONST_OS_SKU_AZURELINUX3OSGUARD,
     CONST_OS_SKU_AZURECONTAINERLINUX,
@@ -564,6 +603,15 @@ upgrade_strategies = [
     CONST_UPGRADE_STRATEGY_ROLLING,
     CONST_UPGRADE_STRATEGY_BLUE_GREEN,
 ]
+
+bastion_skus = [
+    CONST_BASTION_SKU_STANDARD,
+    CONST_BASTION_SKU_PREMIUM,
+]
+
+# AKS backup strategy presets exposed by --backup-strategy.
+# NOTE: must mirror CONST_AKS_BACKUP_STRATEGIES in azext_dataprotection.manual._consts.
+aks_backup_strategies = ["Week", "Month", "DisasterRecovery", "Custom"]
 
 node_disruption_policies = [
     CONST_NODE_DISRUPTION_POLICY_ALLOW,
@@ -1129,6 +1177,17 @@ def load_arguments(self, _):
         c.argument("ksm_metric_annotations_allow_list")
         c.argument("grafana_resource_id", validator=validate_grafanaresourceid)
         c.argument("enable_windows_recording_rules", action="store_true")
+        c.argument(
+            "enable_control_plane_metrics",
+            options_list=["--enable-control-plane-metrics", "--enable-cp-metrics"],
+            action="store_true",
+            help=(
+                "Enable collection of Azure Monitor managed Prometheus control plane metrics for managed "
+                "cluster components (controlplane-apiserver and controlplane-etcd targets by default). "
+                "Requires Azure Monitor metrics to be enabled "
+                "(already enabled or via --enable-azure-monitor-metrics)."
+            ),
+        )
         c.argument("enable_azure_monitor_app_monitoring",
                    is_preview=True,
                    action="store_true"
@@ -1141,9 +1200,19 @@ def load_arguments(self, _):
                    validator=validate_azure_monitor_and_opentelemetry_for_create
                    )
         c.argument("opentelemetry_metrics_port",
+                   options_list=[
+                       "--opentelemetry-metrics-port-http",
+                       _deprecate_option(c, "--opentelemetry-metrics-port", "--opentelemetry-metrics-port-http"),
+                   ],
                    is_preview=True,
                    type=int,
-                   help="Port for OpenTelemetry metrics collection"
+                   help="HTTP/protobuf port for OpenTelemetry metrics collection"
+                   )
+        c.argument("opentelemetry_metrics_port_grpc",
+                   options_list=["--opentelemetry-metrics-port-grpc"],
+                   is_preview=True,
+                   type=int,
+                   help="gRPC port for OpenTelemetry metrics collection"
                    )
         c.argument("disable_opentelemetry_metrics",
                    is_preview=True,
@@ -1151,20 +1220,37 @@ def load_arguments(self, _):
                    help="Disable OpenTelemetry metrics collection"
                    )
         c.argument("enable_opentelemetry_logs",
-                   options_list=["--enable-opentelemetry-logs"],
+                   options_list=[
+                       "--enable-opentelemetry-logs-traces",
+                       _deprecate_option(c, "--enable-opentelemetry-logs", "--enable-opentelemetry-logs-traces"),
+                   ],
                    is_preview=True,
                    action="store_true",
-                   help="Enable OpenTelemetry logs collection"
+                   help="Enable OpenTelemetry logs and traces collection"
                    )
         c.argument("opentelemetry_logs_port",
+                   options_list=[
+                       "--opentelemetry-logs-traces-port-http",
+                       _deprecate_option(c, "--opentelemetry-logs-port", "--opentelemetry-logs-traces-port-http"),
+                   ],
                    is_preview=True,
                    type=int,
-                   help="Port for OpenTelemetry logs collection"
+                   help="HTTP/protobuf port for OpenTelemetry logs and traces collection"
+                   )
+        c.argument("opentelemetry_logs_traces_port_grpc",
+                   options_list=["--opentelemetry-logs-traces-port-grpc"],
+                   is_preview=True,
+                   type=int,
+                   help="gRPC port for OpenTelemetry logs and traces collection"
                    )
         c.argument("disable_opentelemetry_logs",
+                   options_list=[
+                       "--disable-opentelemetry-logs-traces",
+                       _deprecate_option(c, "--disable-opentelemetry-logs", "--disable-opentelemetry-logs-traces"),
+                   ],
                    is_preview=True,
                    action="store_true",
-                   help="Disable OpenTelemetry logs collection"
+                   help="Disable OpenTelemetry logs and traces collection"
                    )
         c.argument("enable_cost_analysis",
                    action="store_true"
@@ -1236,6 +1322,12 @@ def load_arguments(self, _):
                 'by that action.'
             )
         )
+        c.argument(
+            "node_disruption_policy",
+            arg_type=get_enum_type(node_disruption_policies),
+            is_preview=True,
+            help="Set the node disruption policy for the cluster.",
+        )
         # in creation scenario, use "localuser" as default
         c.argument(
             'ssh_access',
@@ -1285,6 +1377,17 @@ def load_arguments(self, _):
         )
         c.argument("enable_hosted_system", action="store_true", is_preview=True)
         c.argument(
+            "system_node_subnet_id",
+            validator=validate_system_node_subnet_id,
+            is_preview=True,
+        )
+        c.argument(
+            "node_subnet_id",
+            options_list=["--node-subnet-id"],
+            validator=validate_node_subnet_id,
+            is_preview=True,
+        )
+        c.argument(
             "control_plane_scaling_size",
             options_list=["--control-plane-scaling-size", "--cp-scaling-size"],
             arg_type=get_enum_type(["H2", "H4", "H8"]),
@@ -1297,6 +1400,49 @@ def load_arguments(self, _):
             action="store_true",
             is_preview=True,
             help="Enable continuous control plane and addon monitor for the cluster.",
+        )
+        # Backup (delegates to the dataprotection extension)
+        c.argument(
+            "enable_backup",
+            action="store_true",
+            is_preview=True,
+            help="Enable Azure Backup for this AKS cluster. Orchestrates the same flow as "
+                 "'az dataprotection enable-backup trigger' (requires the 'dataprotection' extension). "
+                 "Implicitly waits for cluster creation to complete (ignores --no-wait).",
+        )
+        c.argument(
+            "backup_strategy",
+            arg_type=get_enum_type(aks_backup_strategies),
+            is_preview=True,
+            help="Backup strategy preset. Week (default, 7-day operational retention), Month "
+                 "(30-day operational retention), DisasterRecovery (7-day operational + 90-day vault "
+                 "retention), Custom (bring your own vault and policy via --backup-configuration). "
+                 "Only valid with --enable-backup.",
+        )
+        c.argument(
+            "backup_configuration_file",
+            options_list=["--backup-configuration"],
+            type=validate_file_or_dict,
+            is_preview=True,
+            help="Backup configuration as inline JSON string or @file.json. "
+                 "Supports storageAccountResourceId, blobContainerName, backupResourceGroupId, "
+                 "backupVaultId, backupPolicyId, tags. backupVaultId and backupPolicyId are required "
+                 "for Custom strategy. Only valid with --enable-backup.",
+        )
+        c.argument(
+            "enable_on_demand_monitor",
+            action="store_true",
+            is_preview=True,
+            help="Enable on-demand monitor for the cluster.",
+        )
+        # prepared image specification
+        c.argument(
+            'prepared_image_specification_id',
+            options_list=["--prepared-image-specification-id", "--pis-id"],
+            is_preview=True,
+            validator=validate_prepared_image_specification_id,
+            help='The resource ID of the prepared image specification to use for provisioning nodes in the default '
+                 'node pool.'
         )
 
     with self.argument_context("aks update") as c:
@@ -1625,6 +1771,27 @@ def load_arguments(self, _):
                 hide=True,
             ),
         )
+        c.argument("disable_azure_monitor_metrics", action="store_true")
+        c.argument(
+            "enable_control_plane_metrics",
+            options_list=["--enable-control-plane-metrics", "--enable-cp-metrics"],
+            action="store_true",
+            help=(
+                "Enable collection of Azure Monitor managed Prometheus control plane metrics for managed "
+                "cluster components (controlplane-apiserver and controlplane-etcd targets by default). "
+                "Requires Azure Monitor metrics to be enabled "
+                "(already enabled or via --enable-azure-monitor-metrics)."
+            ),
+        )
+        c.argument(
+            "disable_control_plane_metrics",
+            options_list=["--disable-control-plane-metrics", "--disable-cp-metrics"],
+            action="store_true",
+            help=(
+                "Disable collection of Azure Monitor managed Prometheus control plane metrics. "
+                "Sets azureMonitorProfile.metrics.controlPlane.enabled=false on the cluster."
+            ),
+        )
         c.argument("enable_azure_monitor_app_monitoring",
                    action="store_true",
                    is_preview=True
@@ -1664,9 +1831,19 @@ def load_arguments(self, _):
                    validator=validate_azure_monitor_and_opentelemetry_for_update
                    )
         c.argument("opentelemetry_metrics_port",
+                   options_list=[
+                       "--opentelemetry-metrics-port-http",
+                       _deprecate_option(c, "--opentelemetry-metrics-port", "--opentelemetry-metrics-port-http"),
+                   ],
                    is_preview=True,
                    type=int,
-                   help="Port for OpenTelemetry metrics collection"
+                   help="HTTP/protobuf port for OpenTelemetry metrics collection"
+                   )
+        c.argument("opentelemetry_metrics_port_grpc",
+                   options_list=["--opentelemetry-metrics-port-grpc"],
+                   is_preview=True,
+                   type=int,
+                   help="gRPC port for OpenTelemetry metrics collection"
                    )
         c.argument("disable_opentelemetry_metrics",
                    is_preview=True,
@@ -1674,19 +1851,37 @@ def load_arguments(self, _):
                    help="Disable OpenTelemetry metrics collection"
                    )
         c.argument("enable_opentelemetry_logs",
+                   options_list=[
+                       "--enable-opentelemetry-logs-traces",
+                       _deprecate_option(c, "--enable-opentelemetry-logs", "--enable-opentelemetry-logs-traces"),
+                   ],
                    is_preview=True,
                    action="store_true",
-                   help="Enable OpenTelemetry logs collection"
+                   help="Enable OpenTelemetry logs and traces collection"
                    )
         c.argument("opentelemetry_logs_port",
+                   options_list=[
+                       "--opentelemetry-logs-traces-port-http",
+                       _deprecate_option(c, "--opentelemetry-logs-port", "--opentelemetry-logs-traces-port-http"),
+                   ],
                    is_preview=True,
                    type=int,
-                   help="Port for OpenTelemetry logs collection"
+                   help="HTTP/protobuf port for OpenTelemetry logs and traces collection"
+                   )
+        c.argument("opentelemetry_logs_traces_port_grpc",
+                   options_list=["--opentelemetry-logs-traces-port-grpc"],
+                   is_preview=True,
+                   type=int,
+                   help="gRPC port for OpenTelemetry logs and traces collection"
                    )
         c.argument("disable_opentelemetry_logs",
+                   options_list=[
+                       "--disable-opentelemetry-logs-traces",
+                       _deprecate_option(c, "--disable-opentelemetry-logs", "--disable-opentelemetry-logs-traces"),
+                   ],
                    is_preview=True,
                    action="store_true",
-                   help="Disable OpenTelemetry logs collection"
+                   help="Disable OpenTelemetry logs and traces collection"
                    )
         c.argument(
             "enable_vpa",
@@ -1934,10 +2129,49 @@ def load_arguments(self, _):
             help="Enable continuous control plane and addon monitor for the cluster.",
         )
         c.argument(
+            "enable_on_demand_monitor",
+            action="store_true",
+            is_preview=True,
+            help="Enable on-demand monitor for the cluster.",
+        )
+        c.argument(
+            "disable_on_demand_monitor",
+            action="store_true",
+            is_preview=True,
+            help="Disable on-demand monitor for the cluster.",
+        )
+        c.argument(
             "disable_continuous_control_plane_and_addon_monitor",
             action="store_true",
             is_preview=True,
             help="Disable continuous control plane and addon monitor for the cluster.",
+        )
+        # Backup (delegates to the dataprotection extension)
+        c.argument(
+            "enable_backup",
+            action="store_true",
+            is_preview=True,
+            help="Enable Azure Backup for this AKS cluster. Orchestrates the same flow as "
+                 "'az dataprotection enable-backup trigger' (requires the 'dataprotection' extension).",
+        )
+        c.argument(
+            "backup_strategy",
+            arg_type=get_enum_type(aks_backup_strategies),
+            is_preview=True,
+            help="Backup strategy preset. Week (default, 7-day operational retention), Month "
+                 "(30-day operational retention), DisasterRecovery (7-day operational + 90-day vault "
+                 "retention), Custom (bring your own vault and policy via --backup-configuration). "
+                 "Only valid with --enable-backup.",
+        )
+        c.argument(
+            "backup_configuration_file",
+            options_list=["--backup-configuration"],
+            type=validate_file_or_dict,
+            is_preview=True,
+            help="Backup configuration as inline JSON string or @file.json. "
+                 "Supports storageAccountResourceId, blobContainerName, backupResourceGroupId, "
+                 "backupVaultId, backupPolicyId, tags. backupVaultId and backupPolicyId are required "
+                 "for Custom strategy. Only valid with --enable-backup.",
         )
         c.argument(
             "control_plane_scaling_size",
@@ -1953,6 +2187,18 @@ def load_arguments(self, _):
             arg_type=get_enum_type(node_disruption_policies),
             is_preview=True,
             help="Set the node disruption policy for the cluster.",
+        )
+        c.argument("enable_hosted_system", action="store_true", is_preview=True)
+        c.argument(
+            "system_node_subnet_id",
+            validator=validate_system_node_subnet_id,
+            is_preview=True,
+        )
+        c.argument(
+            "node_subnet_id",
+            options_list=["--node-subnet-id"],
+            validator=validate_node_subnet_id,
+            is_preview=True,
         )
 
     with self.argument_context("aks delete") as c:
@@ -2260,6 +2506,14 @@ def load_arguments(self, _):
                  'Example: \'[{"type":"Standard","vnetSubnetId":"/subscriptions/.../subnets/mysubnet"}]\'',
             is_preview=True,
         )
+        # prepared image specification
+        c.argument(
+            'prepared_image_specification_id',
+            options_list=["--prepared-image-specification-id", "--pis-id"],
+            is_preview=True,
+            validator=validate_prepared_image_specification_id,
+            help='The resource ID of the prepared image specification to use for provisioning nodes in the node pool.'
+        )
 
     with self.argument_context("aks nodepool update") as c:
         c.argument(
@@ -2383,6 +2637,14 @@ def load_arguments(self, _):
             arg_type=get_enum_type(gpu_mig_strategies),
             is_preview=True,
             help="Specify the GPU Multi-Instance GPU (MIG) strategy. Allowed values: Single, Mixed.",
+        )
+        # prepared image specification
+        c.argument(
+            'prepared_image_specification_id',
+            options_list=["--prepared-image-specification-id", "--pis-id"],
+            is_preview=True,
+            validator=validate_prepared_image_specification_id,
+            help='The resource ID of the prepared image specification to use for provisioning nodes in the node pool.'
         )
 
     with self.argument_context("aks nodepool upgrade") as c:
@@ -2541,6 +2803,9 @@ def load_arguments(self, _):
             arg_type=get_enum_type(node_eviction_policies),
             validator=validate_eviction_policy,
         )
+        c.argument("labels", nargs="*", validator=validate_nodepool_labels)
+        c.argument("node_taints", validator=validate_nodepool_taints)
+        c.argument("max_pods", type=int, options_list=["--max-pods", "-m"])
 
     with self.argument_context("aks machine update") as c:
         c.argument(
@@ -2549,6 +2814,12 @@ def load_arguments(self, _):
         c.argument("tags", tags_type, help="The tags to set on the machine.")
         c.argument("node_taints", validator=validate_nodepool_taints)
         c.argument("labels", nargs="*", help="Labels to set on the machine.")
+        c.argument(
+            "kubernetes_version",
+            options_list=["--kubernetes-version"],
+            validator=validate_k8s_version,
+            help="Kubernetes version to use for a FlexNode machine.",
+        )
 
     with self.argument_context("aks operation") as c:
         c.argument(
@@ -2638,6 +2909,15 @@ def load_arguments(self, _):
                 validator=validate_start_time,
                 help="The start time of the maintenance window. e.g. 09:30.",
             )
+            c.argument(
+                "maintenance_window_id",
+                help=(
+                    "Resource ID of a shared MaintenanceWindow resource to link this maintenance "
+                    "configuration to. When set, the schedule lives in the referenced MaintenanceWindow "
+                    "and inline schedule arguments cannot be used. Cannot be combined with --config-file "
+                    "(set the maintenanceWindowId property in the JSON instead). Omit for no shared resource."
+                ),
+            )
 
     for scope in [
         "aks maintenanceconfiguration show",
@@ -2646,6 +2926,96 @@ def load_arguments(self, _):
         with self.argument_context(scope) as c:
             c.argument(
                 "config_name", options_list=["--name", "-n"], help="The config name."
+            )
+
+    # -- aks maintenancewindow (peer ARM resource) -----------------------------
+    # --location/-l is auto-bound by the CLI core to the `location` kwarg on
+    # each handler (same pattern as `aks_nodepool_snapshot_create`), so no
+    # explicit c.argument("location", ...) is needed here.
+    with self.argument_context("aks maintenancewindow") as c:
+        c.argument(
+            "maintenance_window_name",
+            options_list=["--name", "-n"],
+            help="The maintenance window name.",
+        )
+
+    for scope in [
+        "aks maintenancewindow create",
+        "aks maintenancewindow update",
+    ]:
+        with self.argument_context(scope) as c:
+            c.argument("tags", tags_type)
+            c.argument(
+                "config_file",
+                help=(
+                    "Path to a JSON file describing the MaintenanceWindow body. "
+                    "When supplied, the JSON wholly defines the resource on create, "
+                    "or replaces the existing `properties` block on update. "
+                    "This is the only path that can set fields without dedicated "
+                    "flags (notAllowedDates, etc.)."
+                ),
+            )
+            c.argument(
+                "schedule_type",
+                arg_type=get_enum_type(schedule_types),
+                help="Recurrence type: Daily, Weekly, AbsoluteMonthly or RelativeMonthly.",
+            )
+            c.argument(
+                "interval_days",
+                type=int,
+                help="The number of days between each set of occurrences for Daily schedule.",
+            )
+            c.argument(
+                "interval_weeks",
+                type=int,
+                help="The number of weeks between each set of occurrences for Weekly schedule.",
+            )
+            c.argument(
+                "interval_months",
+                type=int,
+                help=(
+                    "The number of months between each set of occurrences for AbsoluteMonthly "
+                    "or RelativeMonthly schedule."
+                ),
+            )
+            c.argument(
+                "day_of_week",
+                help="Day of week the maintenance occurs for Weekly or RelativeMonthly schedule.",
+            )
+            c.argument(
+                "day_of_month",
+                type=int,
+                help="Day of month the maintenance occurs for AbsoluteMonthly schedule.",
+            )
+            c.argument(
+                "week_index",
+                arg_type=get_enum_type(week_indexes),
+                help=(
+                    "Instance of the weekday specified in --day-of-week the maintenance occurs "
+                    "for RelativeMonthly schedule."
+                ),
+            )
+            c.argument(
+                "duration_hours",
+                options_list=["--duration"],
+                type=int,
+                validator=validate_duration_hours,
+                help="The length of the maintenance window in hours. Range 4-24.",
+            )
+            c.argument(
+                "utc_offset",
+                validator=validate_utc_offset,
+                help="The UTC offset in format +/-HH:mm. e.g. -08:00 or +05:30.",
+            )
+            c.argument(
+                "start_date",
+                validator=validate_start_date,
+                help="The date the maintenance window activates. e.g. 2026-06-01.",
+            )
+            c.argument(
+                "start_time",
+                validator=validate_start_time,
+                help="The start time of the maintenance window. e.g. 09:30.",
             )
 
     with self.argument_context("aks addon show") as c:
@@ -3388,7 +3758,33 @@ def load_arguments(self, _):
                 help="Name of the load balancer configuration. Required.",
             )
 
-    with self.argument_context("aks bastion") as c:
+    for scope in ['aks bastion enable',
+                  'aks bastion update']:
+        with self.argument_context(scope) as c:
+            c.argument(
+                "bastion_sku",
+                options_list=["--bastion-sku", "-s"],
+                arg_type=get_enum_type(bastion_skus),
+                help="set bastion sku for Azure Bastion host",
+            )
+            c.argument(
+                "bastion_scale_units",
+                options_list=["--bastion-scale-units"],
+                type=int,
+                help="Scale units for the Azure Bastion host.",
+            )
+            c.argument("aks_custom_headers")
+
+    for scope in ['aks bastion enable']:
+        with self.argument_context(scope) as c:
+            c.argument(
+                "bastion_public_ip",
+                options_list=["--bastion-public-ip"],
+                validator=validate_bastion_public_ip_id,
+                help="Optional public IP address for the Azure Bastion host.",
+            )
+
+    with self.argument_context("aks bastion tunnel") as c:
         c.argument("bastion")
         c.argument("port", type=int)
         c.argument("admin", action="store_true")
@@ -3421,6 +3817,27 @@ def load_arguments(self, _):
             c.argument('config_file', options_list=['--config-file'], type=file_type, completer=FilesCompleter(),
                        help='Path to the JSON configuration file containing JWT authenticator properties.')
 
+    # aks identity-binding commands
+    # --allowed-subjects-from-file is optional on create (omitting it falls back
+    # to ClusterRole/ClusterRoleBinding authorization), but required on update
+    # since it is the only mutable field today -- requiring it avoids a no-op
+    # full-PUT that would needlessly re-provision the binding.
+    for scope, is_required in [('aks identity-binding create', False),
+                               ('aks identity-binding update', True)]:
+        with self.argument_context(scope) as c:
+            c.argument(
+                "allowed_subjects_from_file",
+                options_list=["--allowed-subjects-from-file", "-f"],
+                type=file_type,
+                completer=FilesCompleter(),
+                required=is_required,
+                help="Path to a JSON file containing an array of subjects authorized to use this "
+                     "identity binding for token exchange. Each entry has a required "
+                     "'namespaceSelector' and an optional 'serviceAccountSelector', each a Kubernetes "
+                     "label selector with 'matchLabels' (an array of \"key=value\" strings) and/or "
+                     "'matchExpressions'. Maximum 100 entries.",
+            )
+
     # aks list-vm-skus command
     with self.argument_context("aks list-vm-skus") as c:
         c.argument(
@@ -3448,6 +3865,91 @@ def load_arguments(self, _):
             options_list=["--all"],
             action="store_true",
             help="Show all VM SKU information including those not available for the current subscription.",
+        )
+
+    with self.argument_context("aks prepared-image-specification create") as c:
+        c.argument(
+            "name",
+            options_list=["--name", "-n"],
+            required=True,
+            help="The prepared image specification name.",
+        )
+        c.argument(
+            "container_images",
+            nargs="+",
+            help="Container images.",
+        )
+        c.argument(
+            "customization_scripts",
+            type=validate_file_or_dict,
+            help="Customization scripts. Expected value: json-string/@json-file.",
+        )
+        c.argument(
+            "assign_identity",
+            validator=validate_assign_identity,
+            help="Specify an existing user assigned identity.",
+        )
+        c.argument(
+            "version",
+            required=True,
+            help="The prepared image specification version.",
+        )
+
+    with self.argument_context("aks prepared-image-specification update") as c:
+        c.argument(
+            "name",
+            options_list=["--name", "-n"],
+            required=True,
+            help="The prepared image specification name.",
+        )
+
+    with self.argument_context("aks prepared-image-specification delete") as c:
+        c.argument(
+            "name",
+            options_list=["--name", "-n"],
+            required=True,
+            help="The prepared image specification name.",
+        )
+
+    with self.argument_context("aks prepared-image-specification show") as c:
+        c.argument(
+            "name",
+            options_list=["--name", "-n"],
+            required=True,
+            help="The prepared image specification name.",
+        )
+
+    with self.argument_context("aks prepared-image-specification version delete") as c:
+        c.argument(
+            "pis_name",
+            required=True,
+            help="The prepared image specification name.",
+        )
+        c.argument(
+            "name",
+            options_list=["--name", "-n"],
+            required=True,
+            help="The version name.",
+        )
+
+    with self.argument_context("aks prepared-image-specification version list") as c:
+        c.argument(
+            "pis_name",
+            required=True,
+            help="The prepared image specification name.",
+        )
+
+    with self.argument_context("aks prepared-image-specification version show") as c:
+        c.argument(
+            "pis_name",
+            required=True,
+            help="The prepared image specification name.",
+        )
+        c.argument(
+            "name",
+            options_list=["--name", "-n"],
+            required=True,
+            help="The version name.",
         )
 
 

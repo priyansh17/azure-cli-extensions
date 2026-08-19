@@ -16,12 +16,15 @@ from azure.cli.core.aaz import *
 )
 class Show(AAZCommand):
     """Get an existing route with the specified route name under the specified subscription, resource group, profile, and AzureFrontDoor endpoint.
+
+    :example: Routes_Get
+        az afd route show --resource-group RG --profile-name profile1 --endpoint-name endpoint1 --route-name route1
     """
 
     _aaz_info = {
-        "version": "2025-06-01",
+        "version": "2026-04-01-preview",
         "resources": [
-            ["mgmt-plane", "/subscriptions/{}/resourcegroups/{}/providers/microsoft.cdn/profiles/{}/afdendpoints/{}/routes/{}", "2025-06-01"],
+            ["mgmt-plane", "/subscriptions/{}/resourcegroups/{}/providers/microsoft.cdn/profiles/{}/afdendpoints/{}/routes/{}", "2026-04-01-preview"],
         ]
     }
 
@@ -142,7 +145,7 @@ class Show(AAZCommand):
         def query_parameters(self):
             parameters = {
                 **self.serialize_query_param(
-                    "api-version", "2025-06-01",
+                    "api-version", "2026-04-01-preview",
                     required=True,
                 ),
             }
@@ -221,7 +224,6 @@ class Show(AAZCommand):
             )
             properties.origin_group = AAZObjectType(
                 serialized_name="originGroup",
-                flags={"required": True},
             )
             _ShowHelper._build_schema_resource_reference_read(properties.origin_group)
             properties.origin_path = AAZStrType(

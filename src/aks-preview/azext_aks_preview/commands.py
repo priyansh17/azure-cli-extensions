@@ -9,6 +9,7 @@ from azext_aks_preview._client_factory import (
     cf_agent_pools,
     cf_managed_namespaces,
     cf_maintenance_configurations,
+    cf_maintenance_windows,
     cf_managed_clusters,
     cf_mc_snapshots,
     cf_nodepool_snapshots,
@@ -18,6 +19,7 @@ from azext_aks_preview._client_factory import (
     cf_identity_bindings,
     cf_jwt_authenticators,
     cf_vm_skus,
+    cf_prepared_image_specifications,
 )
 
 from azext_aks_preview._format import (
@@ -135,6 +137,12 @@ def load_command_table(self, _):
         client_factory=cf_maintenance_configurations,
     )
 
+    maintenance_window_sdk = CliCommandType(
+        operations_tmpl="azext_aks_preview.vendored_sdks.azure_mgmt_preview_aks."
+        "operations._operations#MaintenanceWindowsOperations.{}",
+        client_factory=cf_maintenance_windows,
+    )
+
     nodepool_snapshot_sdk = CliCommandType(
         operations_tmpl="azext_aks_preview.vendored_sdks.azure_mgmt_preview_aks."
         "operations._operations#SnapshotsOperations.{}",
@@ -157,6 +165,12 @@ def load_command_table(self, _):
         operations_tmpl="azext_aks_preview.vendored_sdks.azure_mgmt_preview_aks."
         "operations._operations#VmSkusOperations.{}",
         client_factory=cf_vm_skus,
+    )
+
+    prepared_image_specifications_sdk = CliCommandType(
+        operations_tmpl="azext_aks_preview.vendored_sdks.azure_mgmt_preview_aks_pis."
+        "operations._operations#PreparedImageSpecificationsOperations.{}",
+        client_factory=cf_prepared_image_specifications,
     )
 
     # AKS managed cluster commands
@@ -205,7 +219,6 @@ def load_command_table(self, _):
         g.custom_command(
             "operation-abort", "aks_operation_abort", supports_no_wait=True
         )
-        g.custom_command("bastion", "aks_bastion")
 
     # AKS maintenance configuration commands
     with self.command_group(
@@ -218,6 +231,22 @@ def load_command_table(self, _):
         g.custom_command("add", "aks_maintenanceconfiguration_add")
         g.custom_command("update", "aks_maintenanceconfiguration_update")
         g.custom_command("delete", "aks_maintenanceconfiguration_delete")
+
+    # AKS maintenance window commands (peer ARM resource, preview API only).
+    # Requires the Microsoft.ContainerService/AKSSharedMaintenanceWindowPreview
+    # feature to be registered on the subscription; the RP enforces this and
+    # surfaces 403 if it isn't.
+    with self.command_group(
+        "aks maintenancewindow",
+        maintenance_window_sdk,
+        client_factory=cf_maintenance_windows,
+    ) as g:
+        g.custom_command("list", "aks_maintenancewindow_list")
+        g.custom_show_command("show", "aks_maintenancewindow_show")
+        g.custom_command("create", "aks_maintenancewindow_create", supports_no_wait=True)
+        g.custom_command("update", "aks_maintenancewindow_update", supports_no_wait=True)
+        g.custom_command("delete", "aks_maintenancewindow_delete", supports_no_wait=True, confirmation=True)
+        g.wait_command("wait")
 
     # AKS loadbalancer commands
     with self.command_group(
@@ -283,6 +312,13 @@ def load_command_table(self, _):
         g.custom_command("update", "aks_agentpool_update", supports_no_wait=True)
         g.custom_command("delete", "aks_agentpool_delete", supports_no_wait=True)
         g.custom_command("get-upgrades", "aks_agentpool_get_upgrade_profile")
+        g.custom_command(
+            "get-bootstrap-data",
+            "aks_agentpool_get_bootstrap_data",
+            sensitive_info=g.sensitive(
+                sensitive_keys=["bootstrapToken", "caCertData"]
+            ),
+        )
         g.custom_command(
             "get-rollback-versions",
             "aks_agentpool_get_rollback_versions",
@@ -577,9 +613,19 @@ def load_command_table(self, _):
         "aks identity-binding", managed_clusters_sdk, client_factory=cf_identity_bindings
     ) as g:
         g.custom_command("create", "aks_identity_binding_create")
+        g.custom_command("update", "aks_identity_binding_update")
         g.custom_command("delete", "aks_identity_binding_delete")
         g.custom_show_command("show", "aks_identity_binding_show")
         g.custom_command("list", "aks_identity_binding_list")
+
+    # AKS bastion
+    with self.command_group(
+        "aks bastion", managed_clusters_sdk, client_factory=cf_managed_clusters
+    ) as g:
+        g.custom_command("enable", "aks_bastion_enable", supports_no_wait=True)
+        g.custom_command("disable", "aks_bastion_disable", supports_no_wait=True)
+        g.custom_command("update", "aks_bastion_update", supports_no_wait=True)
+        g.custom_command("tunnel", "aks_bastion_tunnel")
 
     # AKS jwt authenticator commands
     with self.command_group(
@@ -636,3 +682,46 @@ def load_command_table(self, _):
         self.command_table["aks safeguards delete"] = Delete(loader=self)
         self.command_table["aks safeguards list"] = List(loader=self)
         self.command_table["aks safeguards wait"] = Wait(loader=self)
+
+    with self.command_group("aks prepared-image-specification", prepared_image_specifications_sdk,
+                            client_factory=cf_prepared_image_specifications) as g:
+        g.custom_command(
+            "create",
+            "aks_prepared_image_specification_create",
+            supports_no_wait=True,
+        )
+        g.custom_command(
+            "update",
+            "aks_prepared_image_specification_update",
+        )
+        g.custom_command(
+            "delete",
+            "aks_prepared_image_specification_delete",
+            supports_no_wait=True,
+            confirmation=True,
+        )
+        g.custom_command(
+            "list",
+            "aks_prepared_image_specification_list",
+        )
+        g.custom_show_command(
+            "show",
+            "aks_prepared_image_specification_show",
+        )
+
+    with self.command_group("aks prepared-image-specification version", prepared_image_specifications_sdk,
+                            client_factory=cf_prepared_image_specifications) as g:
+        g.custom_command(
+            "delete",
+            "aks_prepared_image_specification_version_delete",
+            supports_no_wait=True,
+            confirmation=True,
+        )
+        g.custom_command(
+            "list",
+            "aks_prepared_image_specification_version_list",
+        )
+        g.custom_show_command(
+            "show",
+            "aks_prepared_image_specification_version_show",
+        )

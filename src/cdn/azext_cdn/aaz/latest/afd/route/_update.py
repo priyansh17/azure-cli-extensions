@@ -17,20 +17,14 @@ from azure.cli.core.aaz import *
 class Update(AAZCommand):
     """Update a new route with the specified route name under the specified subscription, resource group, profile, and AzureFrontDoor endpoint.
 
-    :example: Update a route to accept both Http and Https requests and redirect all trafic to use Https.
-        az afd route update -g group --endpoint-name endpoint1 --profile-name profile --route-name route1 --supported-protocols Http Https --https-redirect Enabled
-
-    :example: Update a route's rule sets settings to customize the route behavior.
-        az afd route update -g group --endpoint-name endpoint1 --profile-name profile --route-name route1 --rule-sets ruleset1 rulseset2
-
-    :example: Update a route's compression settings to enable compression for the specified content types.
-        az afd route update -g group --endpoint-name endpoint1 --profile-name profile --route-name route1 --query-string-caching-behavior IgnoreQueryString --enable-compression true --content-types-to-compress text/javascript text/plain
+    :example: Routes_Create
+        az afd route update --resource-group RG --profile-name profile1 --endpoint-name endpoint1 --route-name route1 --cache-configuration "{compression-settings:{content-types-to-compress:[text/html,application/octet-stream],is-compression-enabled:True},query-parameters:querystring=test,query-string-caching-behavior:IgnoreSpecifiedQueryStrings}" --formatted-custom-domains "[{id:/subscriptions/subid/resourceGroups/RG/providers/Microsoft.Cdn/profiles/profile1/customDomains/domain1}]" --enabled-state Enabled --forwarding-protocol MatchRequest --https-redirect Enabled --link-to-default-domain Enabled --origin-group /subscriptions/subid/resourceGroups/RG/providers/Microsoft.Cdn/profiles/profile1/originGroups/originGroup1 --origin-path None --patterns-to-match "[/*]" --formatted-rule-sets "[{id:/subscriptions/subid/resourceGroups/RG/providers/Microsoft.Cdn/profiles/profile1/ruleSets/ruleSet1}]" --supported-protocols "[Https,Http]"
     """
 
     _aaz_info = {
-        "version": "2025-06-01",
+        "version": "2026-04-01-preview",
         "resources": [
-            ["mgmt-plane", "/subscriptions/{}/resourcegroups/{}/providers/microsoft.cdn/profiles/{}/afdendpoints/{}/routes/{}", "2025-06-01"],
+            ["mgmt-plane", "/subscriptions/{}/resourcegroups/{}/providers/microsoft.cdn/profiles/{}/afdendpoints/{}/routes/{}", "2026-04-01-preview"],
         ]
     }
 
@@ -330,7 +324,7 @@ class Update(AAZCommand):
         def query_parameters(self):
             parameters = {
                 **self.serialize_query_param(
-                    "api-version", "2025-06-01",
+                    "api-version", "2026-04-01-preview",
                     required=True,
                 ),
             }
@@ -437,7 +431,7 @@ class Update(AAZCommand):
         def query_parameters(self):
             parameters = {
                 **self.serialize_query_param(
-                    "api-version", "2025-06-01",
+                    "api-version", "2026-04-01-preview",
                     required=True,
                 ),
             }
@@ -505,7 +499,7 @@ class Update(AAZCommand):
                 properties.set_prop("forwardingProtocol", AAZStrType, ".forwarding_protocol")
                 properties.set_prop("httpsRedirect", AAZStrType, ".https_redirect")
                 properties.set_prop("linkToDefaultDomain", AAZStrType, ".link_to_default_domain")
-                properties.set_prop("originGroup", AAZObjectType, ".", typ_kwargs={"flags": {"required": True}})
+                properties.set_prop("originGroup", AAZObjectType)
                 properties.set_prop("originPath", AAZStrType, ".origin_path")
                 properties.set_prop("patternsToMatch", AAZListType, ".patterns_to_match")
                 properties.set_prop("ruleSets", AAZListType, ".formatted_rule_sets")
@@ -646,7 +640,6 @@ class _UpdateHelper:
         )
         properties.origin_group = AAZObjectType(
             serialized_name="originGroup",
-            flags={"required": True},
         )
         cls._build_schema_resource_reference_read(properties.origin_group)
         properties.origin_path = AAZStrType(

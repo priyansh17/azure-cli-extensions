@@ -16,12 +16,15 @@ from azure.cli.core.aaz import *
 )
 class Show(AAZCommand):
     """Get an existing origin within an origin group.
+
+    :example: AFDOrigins_Get
+        az afd origin show --resource-group RG --profile-name profile1 --origin-group-name origingroup1 --origin-name origin1
     """
 
     _aaz_info = {
-        "version": "2025-06-01",
+        "version": "2026-04-01-preview",
         "resources": [
-            ["mgmt-plane", "/subscriptions/{}/resourcegroups/{}/providers/microsoft.cdn/profiles/{}/origingroups/{}/origins/{}", "2025-06-01"],
+            ["mgmt-plane", "/subscriptions/{}/resourcegroups/{}/providers/microsoft.cdn/profiles/{}/origingroups/{}/origins/{}", "2026-04-01-preview"],
         ]
     }
 
@@ -142,7 +145,7 @@ class Show(AAZCommand):
         def query_parameters(self):
             parameters = {
                 **self.serialize_query_param(
-                    "api-version", "2025-06-01",
+                    "api-version", "2026-04-01-preview",
                     required=True,
                 ),
             }
@@ -209,7 +212,6 @@ class Show(AAZCommand):
             )
             properties.host_name = AAZStrType(
                 serialized_name="hostName",
-                flags={"required": True},
             )
             properties.http_port = AAZIntType(
                 serialized_name="httpPort",
